@@ -1,0 +1,57 @@
+name: ECS Blue-Green Deployment
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  AWS_REGION: ap-south-1
+  SERVICE_NAME: my-ecs-app
+  CFN_STACK: ecs-blue-green-stack
+  ECR_REPO: my-ecs-app-repo
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker Image
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          docker build -t $ECR_REPO:$IMAGE_TAG .
+          docker tag $ECR_REPO:$IMAGE_TAG ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/$ECR_REPO:$IMAGE_TAG
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/$ECR_REPO:$IMAGE_TAG
+          echo "IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/$ECR_REPO:$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Deploy CloudFormation Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file ecs-blue-green.yml \
+            --stack-name $CFN_STACK \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              ServiceName=$SERVICE_NAME \
+              ContainerImage=$IMAGE \
+              VpcId=vpc-xxxxxxxx \
+              Subnets=subnet-xxxx,subnet-yyyy
+
+      - name: Start Blue-Green Deployment
+        run: |
+          aws deploy create-deployment \
+            --application-name $SERVICE_NAME-App \
+            --deployment-group-name $SERVICE_NAME-Group \
+            --revision "revisionType=AppSpecContent,appSpecContent={\"content\":\"version:0.0\\nResources:\\n  - TargetService:\\n      Type: AWS::ECS::Service\\n      Properties:\\n        TaskDefinition: $IMAGE\\n        LoadBalancerInfo:\\n          ContainerName: $SERVICE_NAME\\n          ContainerPort: 80\"}" \
+            --region $AWS_REGION
