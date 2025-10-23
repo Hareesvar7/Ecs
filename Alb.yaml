@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Deploy resources including an internal ALB, parameterized similarly to your S3 configuration.
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: VPC to deploy the Load Balancer in.
+
+  SubnetIds:
+    Type: List<String>
+    Description: List of private subnet IDs for the ALB.
+  
+  LoadBalancerName:
+    Type: String
+    Description: Optional. Specify ALB name or leave blank for auto-generation.
+    Default: ""
+  
+  SecurityGroupIds:
+    Type: List<String>
+    Description: ALB Security Group IDs.
+  
+  EnableDeletionProtection:
+    Type: String
+    Description: Enable deletion protection for production ALB.
+    AllowedValues:
+      - true
+      - false
+    Default: true
+
+Resources:
+  InternalALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !If
+        - HasLBName
+        - !Ref LoadBalancerName
+        - !Ref "AWS::NoValue"
+      Type: application
+      Scheme: internal
+      Subnets: !Ref SubnetIds
+      SecurityGroups: !Ref SecurityGroupIds
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: !Ref EnableDeletionProtection
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref InternalALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: 200
+            ContentType: text/plain
+            MessageBody: Internal ALB active
+
+Conditions:
+  HasLBName: !Not [!Equals [!Ref LoadBalancerName, ""]]
+
+Outputs:
+  InternalLoadBalancerDNSName:
+    Description: DNS name of the internal ALB.
+    Value: !GetAtt InternalALB.DNSName
